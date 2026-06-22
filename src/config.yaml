@@ -1,0 +1,42 @@
+paths:
+  dataset_root: "d:/Coding/radiomics/dataset/NSCLC-Radiomics"
+  clinical_csv: "d:/Coding/radiomics/dataset/NSCLC-Radiomics-Lung1.clinical-version3-Oct-2019.csv"
+  output_dir: "d:/Coding/radiomics/outputs"
+
+preprocessing:
+  target_spacing: [1.0, 1.0, 1.0]          # mm, isotropic resampling
+  hu_min: -1000                             # HU clipping lower bound (air)
+  hu_max: 400                               # HU clipping upper bound (bone threshold)
+  interpolator: "sitkBSpline"               # CT image interpolation
+  mask_interpolator: "sitkNearestNeighbor"  # Mask interpolation (preserve binary)
+  min_tumor_voxels: 50                      # Minimum number of tumor voxels required
+
+radiomics:
+  imageType:
+    Original: {}
+    Wavelet: {}                             # Adds 8 decomposition levels
+  featureClass:
+    firstorder: []
+    shape: []
+    glcm: []
+    glrlm: []
+    glszm: []
+    gldm: []
+    ngtdm: []
+  setting:
+    binWidth: 25                            # HU bin width for texture features
+    resampledPixelSpacing: [1.0, 1.0, 1.0]
+    interpolator: "sitkBSpline"
+    normalizeScale: 100
+    verbose: false
+
+analysis:
+  variance_threshold: 0.01                  # Remove near-constant features
+  correlation_threshold: 0.95              # Remove one of highly correlated pair
+  fdr_alpha: 0.05                          # FDR-corrected significance threshold
+  random_seed: 42
+
+survival:
+  n_cv_folds: 5
+  test_size: 0.25
+  random_seed: 42
