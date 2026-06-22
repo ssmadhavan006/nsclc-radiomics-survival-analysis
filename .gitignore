@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Patient datasets (large DICOMs)
+dataset/
+
+# Pipeline features and temporary output cache
+outputs/features/
+outputs/logs/
+outputs/figures/cache/
+
+# Agent/workspace metadata and prompt files
+.agents/
+prompt.md
+task.md
+implementation_plan.md
+
