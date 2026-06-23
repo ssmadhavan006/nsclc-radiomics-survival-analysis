@@ -1,7 +1,4 @@
 import os
-import zipfile
-import tempfile
-import shutil
 import yaml
 import logging
 import numpy as np
@@ -108,15 +105,15 @@ def format_risk_markdown(risk_cat: str, hazard_str: str, percentile_str: str) ->
 <div style='background-color: #0f172a; padding: 14px; border-radius: 8px; border: 1px solid #334155;'>
     <div style='margin-bottom: 12px;'>
         <span style='color: #94a3b8; font-size: 11px; text-transform: uppercase; font-weight: bold;'>Risk Category</span><br/>
-        <strong style='color: {color}; font-size: 22px;'>{risk_cat}</strong>
+        <strong style='color: {color}; font-size: 20px;'>{risk_cat}</strong>
     </div>
     <div style='margin-bottom: 12px; border-top: 1px solid #334155; padding-top: 8px;'>
         <span style='color: #94a3b8; font-size: 11px; text-transform: uppercase; font-weight: bold;'>Predicted Hazard Deviation</span><br/>
-        <strong style='color: #f1f5f9; font-size: 15px;'>{hazard_str}</strong>
+        <strong style='color: #f1f5f9; font-size: 14px;'>{hazard_str}</strong>
     </div>
     <div style='border-top: 1px solid #334155; padding-top: 8px;'>
         <span style='color: #94a3b8; font-size: 11px; text-transform: uppercase; font-weight: bold;'>Cohort Percentile Rank</span><br/>
-        <strong style='color: #38bdf8; font-size: 15px;'>{percentile_str}</strong>
+        <strong style='color: #38bdf8; font-size: 14px;'>{percentile_str}</strong>
     </div>
 </div>
 """
@@ -158,7 +155,6 @@ def generate_roi_image(patient_id: str, ct_dir: str = None, seg_path: str = None
         max_slice_idx = int(np.argmax(slice_sums))
         
         if slice_sums[max_slice_idx] == 0:
-            # Fallback to middle slice
             max_slice_idx = ct_arr.shape[0] // 2
             
         ct_slice = ct_arr[max_slice_idx]
@@ -240,41 +236,21 @@ def generate_roi_image(patient_id: str, ct_dir: str = None, seg_path: str = None
         return None
 
 # =====================================================================
-# 3. PIPELINE UPLOADS PROCESSING LOGIC
+# 3. DIRECTORY PROCESSING LOGIC FOR CUSTOM SCANS
 # =====================================================================
 
-def process_uploaded_dicoms(zip_file, seg_file):
-    if zip_file is None or seg_file is None:
-        return "Error: Please upload both the CT slices (.zip) and the GTV mask (.dcm)", None
-        
-    temp_dir = tempfile.mkdtemp()
+def process_patient_directory(ct_dir, seg_path):
+    """Processes a patient CT folder and SEG file to extract the 19 features on-the-fly."""
     try:
-        # Extract CT ZIP
-        with zipfile.ZipFile(zip_file.name, 'r') as zip_ref:
-            zip_ref.extractall(temp_dir)
-            
-        # Discover CT files (ignore the SEG file if placed inside)
-        seg_name = os.path.basename(seg_file.name)
-        dcm_files = []
-        for root, _, files in os.walk(temp_dir):
-            for f in files:
-                if f.endswith('.dcm') and f != seg_name:
-                    dcm_files.append(os.path.join(root, f))
-                    
-        if not dcm_files:
-            return "Error: No CT slice DICOM files (.dcm) found in the uploaded ZIP.", None
-            
-        ct_dir = os.path.dirname(dcm_files[0])
-        
         # Load master config
         with open("src/config.yaml", "r") as f:
             config = yaml.safe_load(f)
             
         # Run ingestion & preprocessing steps
         from src.preprocessing import preprocess_case
-        preprocessed_ct, preprocessed_mask = preprocess_case(ct_dir, seg_file.name, config)
+        preprocessed_ct, preprocessed_mask = preprocess_case(ct_dir, seg_path, config)
         
-        # Check overlaps
+        # Check GTV voxel overlaps
         mask_arr = sitk.GetArrayFromImage(preprocessed_mask)
         voxel_count = np.sum(mask_arr)
         if voxel_count < 50:
@@ -294,21 +270,19 @@ def process_uploaded_dicoms(zip_file, seg_file):
             else:
                 extracted_19[feat] = float(val)
                 
-        return "Success: CT volume and GTV segmentation successfully matched and processed!", extracted_19
+        return "Success", extracted_19
         
     except Exception as e:
         return f"Pipeline execution failed: {str(e)}", None
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 # =====================================================================
 # 4. PLOTTING & DIAGNOSTIC INTERFACE CALCULATIONS
 # =====================================================================
 
-def calculate_score_and_plot(features_dict, age, gender, stage, patient_id="LUNG1-003", custom_roi_path=None):
+def calculate_score_and_plot(features_dict, age, gender, stage, patient_id="LUNG1-003", custom_ct_dir=None, custom_seg_path=None):
     # Scale features
     input_vals = [features_dict[feat] for feat in selected_features]
-    scaled_vals = scaler.transform([input_vals])[0]
+    scaled_vals = scaler.transform(pd.DataFrame([input_vals], columns=selected_features))[0]
     
     # Compute PrognosticScore (relative hazard)
     coefs = cph_radiomics.params_.values
@@ -395,11 +369,8 @@ def calculate_score_and_plot(features_dict, age, gender, stage, patient_id="LUNG
     fig.savefig(curve_path, dpi=150, facecolor=fig.get_facecolor(), edgecolor='none')
     plt.close(fig)
     
-    # Resolve the ROI overlay path
-    if custom_roi_path:
-        roi_path = custom_roi_path
-    else:
-        roi_path = generate_roi_image(patient_id)
+    # Resolve GTV Overlay Visual path
+    roi_path = generate_roi_image(patient_id, ct_dir=custom_ct_dir, seg_path=custom_seg_path)
         
     # Format features data table (using distinct names to prevent name collision)
     table_rows = []
@@ -456,9 +427,9 @@ with gr.Blocks(title="NSCLC Quantitative Radiomics Signature Demonstrator", css=
             with gr.Group():
                 gr.HTML("<h3 style='color:#38bdf8; margin: 4px 0;'>1. Patient Details & Inputs</h3>")
                 with gr.Row():
-                    input_age = gr.Slider(minimum=30, maximum=95, value=68, step=1, label="Age")
-                    input_gender = gr.Dropdown(choices=["Male", "Female"], value="Male", label="Gender")
-                    input_stage = gr.Dropdown(choices=["I", "II", "IIIa", "IIIb"], value="IIIb", label="Clinical Stage")
+                    input_age = gr.Textbox(label="Age", interactive=False)
+                    input_gender = gr.Textbox(label="Gender", interactive=False)
+                    input_stage = gr.Textbox(label="Clinical Stage", interactive=False)
                     
             with gr.Group():
                 gr.HTML("<h3 style='color:#38bdf8; margin: 4px 0;'>2. Diagnostic Outputs</h3>")
@@ -492,11 +463,17 @@ with gr.Blocks(title="NSCLC Quantitative Radiomics Signature Demonstrator", css=
         with gr.Column(scale=7):
             with gr.Tabs():
                 
-                # Tab 1: Cohort Select Demo
-                with gr.TabItem("Demo Patient Selection"):
-                    gr.HTML("<p style='color:#94a3b8; margin-bottom:8px;'>Choose a patient from the validated TCIA Lung1 cohort to inspect their GTV radiomic signature and CT segment overlay.</p>")
-                    select_pid = gr.Dropdown(choices=patient_ids, value="LUNG1-003", label="Select Patient ID")
-                    btn_load_demo = gr.Button("Load Demo Patient Data", variant="primary")
+                # Tab 1: Load Patient Scan
+                with gr.TabItem("Load Patient Scan"):
+                    gr.HTML("<p style='color:#94a3b8; margin-bottom:8px;'>Select a patient ID from the dropdown, or enter a custom patient ID or full local directory path at the side to extract GTV features.</p>")
+                    with gr.Row():
+                        select_pid = gr.Dropdown(choices=patient_ids, value="LUNG1-003", label="Select Patient ID")
+                        patient_input = gr.Textbox(
+                            label="Or Enter Custom Patient ID / Folder Path", 
+                            placeholder="e.g. LUNG1-105 or full local directory path...",
+                            value=""
+                        )
+                    btn_load = gr.Button("Load Patient Data & Scan", variant="primary")
                     
                 # Tab 2: Interactive Simulation Sliders
                 with gr.TabItem("Interactive Feature Sliders"):
@@ -524,15 +501,6 @@ with gr.Blocks(title="NSCLC Quantitative Radiomics Signature Demonstrator", css=
                     
                     btn_run_sim = gr.Button("Re-Run Simulation Prognosis", variant="secondary")
                     
-                # Tab 3: Custom DICOM Upload
-                with gr.TabItem("Custom DICOM Upload"):
-                    gr.HTML("<p style='color:#94a3b8; margin-bottom:8px;'>Upload custom pre-treatment CT slices and GTV SEG file to run the coordinates matching and extraction pipeline in real-time.</p>")
-                    with gr.Row():
-                        upload_zip = gr.File(label="CT Slices (ZIP containing .dcm slices)", file_types=[".zip"])
-                        upload_seg = gr.File(label="GTV Mask (DICOM SEG file .dcm)", file_types=[".dcm"])
-                    upload_status = gr.Textbox(label="Pipeline Processing Log", placeholder="Awaiting file upload...")
-                    btn_run_upload = gr.Button("Run Real-Time Extraction Pipeline", variant="primary")
-                    
             # Output Data Table of 19 Selected Features (Dynamic)
             gr.HTML("<h3 style='color:#38bdf8; margin: 12px 0 4px 0;'>3. Feature Interpretations & Raw Values</h3>")
             out_table = gr.Dataframe(
@@ -542,65 +510,110 @@ with gr.Blocks(title="NSCLC Quantitative Radiomics Signature Demonstrator", css=
             )
 
     # =====================================================================
-    # 6. BUTTON CLICK HANDLERS
+    # 6. CALLBACK HANDLERS
     # =====================================================================
 
-    # Dropdown select loader callback
-    def load_demo_data(pid):
-        patient_row = df_cohort[df_cohort["PatientID"] == pid].iloc[0]
-        
-        # Extracted features dictionary
-        feat_dict = {}
-        for feat in selected_features:
-            feat_dict[feat] = float(patient_row[feat])
+    def load_patient_handler(select_pid, patient_input):
+        """Unified loader for patient IDs and folder directories."""
+        input_str = patient_input.strip() if patient_input else ""
+        if not input_str:
+            input_str = select_pid if select_pid else ""
             
-        # Clinical parameters
-        age = float(patient_row["age"])
-        gender = "Male" if patient_row["gender"] == "male" else "Female"
-        stage = str(patient_row["Overall.Stage"])
+        input_str = input_str.strip()
+        if not input_str:
+            return [0.0, "<div style='color:red;'>Error: Please select a Patient ID or enter a Folder Path.</div>", None, None, pd.DataFrame(), "", "", ""] + [gr.update() for _ in selected_features]
+            
+        ct_dir = None
+        seg_path = None
+        pid = input_str
         
-        # Calculate C-index and generate curves
-        score, risk_html, roi_path, curve_path, table = calculate_score_and_plot(feat_dict, age, gender, stage, patient_id=pid)
+        # 1. Resolve local path if input is directory
+        if os.path.isdir(input_str):
+            from src.data_ingestion import find_patient_series
+            discovered_ct, discovered_seg, _ = find_patient_series(input_str)
+            if discovered_ct is None or discovered_seg is None:
+                return [0.0, f"<div style='color:red;'>Error: Could not locate CT slices and GTV SEG file under: {input_str}</div>", None, None, pd.DataFrame(), "", "", ""] + [gr.update() for _ in selected_features]
+                
+            ct_dir = discovered_ct
+            seg_path = discovered_seg
+            pid = os.path.basename(os.path.normpath(input_str))
+            
+        # 2. Check clinical database
+        clinical_rows = df_cohort[df_cohort["PatientID"] == pid]
+        if len(clinical_rows) > 0:
+            patient_row = clinical_rows.iloc[0]
+            age = float(patient_row["age"])
+            gender = "Male" if patient_row["gender"] == "male" else "Female"
+            stage = str(patient_row["Overall.Stage"])
+            
+            # Pre-extracted features
+            feat_dict = {}
+            for feat in selected_features:
+                feat_dict[feat] = float(patient_row[feat])
+                
+            status_msg = f"Success: Loaded data for '{pid}' from database."
+        else:
+            # If not in database, attempt local path scan in dataset root
+            if ct_dir is None or seg_path is None:
+                dataset_root = "dataset/NSCLC-Radiomics"
+                patient_dir = os.path.join(dataset_root, pid)
+                if os.path.isdir(patient_dir):
+                    from src.data_ingestion import find_patient_series
+                    discovered_ct, discovered_seg, _ = find_patient_series(patient_dir)
+                    if discovered_ct is not None and discovered_seg is not None:
+                        ct_dir = discovered_ct
+                        seg_path = discovered_seg
+                        
+            if ct_dir is None or seg_path is None:
+                return [0.0, f"<div style='color:red;'>Error: Patient '{pid}' not in database and no local DICOM files found.</div>", None, None, pd.DataFrame(), "", "", ""] + [gr.update() for _ in selected_features]
+                
+            # Extract features on-the-fly
+            status_msg, feat_dict = process_patient_directory(ct_dir, seg_path)
+            if "Success" not in status_msg:
+                return [0.0, f"<div style='color:red;'>{status_msg}</div>", None, None, pd.DataFrame(), "", "", ""] + [gr.update() for _ in selected_features]
+                
+            # Fallback metadata for unrecorded patients
+            age = 68.0
+            gender = "Male"
+            stage = "IIIb"
+            status_msg = f"Success: Loaded local scan '{pid}' and extracted GTV features. (Clinical details defaulted)"
+
+        # Calculate prognostic scores, KM curves, and slice crop overlays
+        score, risk_html, roi_path, curve_path, table = calculate_score_and_plot(
+            feat_dict, age, gender, stage, patient_id=pid, custom_ct_dir=ct_dir, custom_seg_path=seg_path
+        )
         
-        # Generate sliders updates
+        # Display the load status message above outputs
+        styled_status = f"<div style='background-color:#1e293b; padding:8px; border-radius:6px; border:1px solid #334155; margin-bottom:10px; font-size:12px; color:#38bdf8;'>{status_msg}</div>"
+        risk_html = styled_status + risk_html
+        
         slider_updates = [gr.update(value=feat_dict[feat]) for feat in selected_features]
         
-        return [score, risk_html, roi_path, curve_path, table, age, gender, stage] + slider_updates
+        return [score, risk_html, roi_path, curve_path, table, f"{age:.0f}", gender, stage] + slider_updates
 
-    # Interactive Sliders simulation callback (only updates score/curves, doesn't change patient scan)
+    # Interactive Sliders simulation callback
     def run_slider_simulation(age, gender, stage, *slider_vals):
         feat_dict = {}
         for idx, feat in enumerate(selected_features):
             feat_dict[feat] = slider_vals[idx]
             
-        score, risk_html, roi_path, curve_path, table = calculate_score_and_plot(feat_dict, age, gender, stage, patient_id="simulated")
-        return score, risk_html, curve_path, table
-
-    # DICOM upload pipeline callback
-    def run_upload_pipeline(zip_file, seg_file, age, gender, stage):
-        status, feat_dict = process_uploaded_dicoms(zip_file, seg_file)
-        if "Success" not in status:
-            return status, None, None, None, None, None
+        try:
+            age_val = float(age)
+        except ValueError:
+            age_val = 68.0
             
-        patient_id = "custom_upload"
-        roi_img_path = generate_roi_image(patient_id, ct_dir=zip_file.name, seg_path=seg_file.name)
-        
         score, risk_html, roi_path, curve_path, table = calculate_score_and_plot(
-            feat_dict, age, gender, stage, patient_id=patient_id, custom_roi_path=roi_img_path
+            feat_dict, age_val, gender, stage, patient_id="simulated"
         )
-        
-        # Generate sliders updates to match uploaded values
-        slider_updates = [gr.update(value=feat_dict[feat]) for feat in selected_features]
-        
-        return [status, score, risk_html, roi_path, curve_path, table] + slider_updates
+        return score, risk_html, curve_path, table
 
     # Define inputs/outputs lists dynamically
     slider_list = [slider_widgets[feat] for feat in selected_features]
 
-    # Wire Load Demo button
-    btn_load_demo.click(
-        fn=load_demo_data,
-        inputs=[select_pid],
+    # Wire Load button
+    btn_load.click(
+        fn=load_patient_handler,
+        inputs=[select_pid, patient_input],
         outputs=[out_score, out_risk_html, out_roi_image, out_plot, out_table, input_age, input_gender, input_stage] + slider_list
     )
 
@@ -611,17 +624,10 @@ with gr.Blocks(title="NSCLC Quantitative Radiomics Signature Demonstrator", css=
         outputs=[out_score, out_risk_html, out_plot, out_table]
     )
 
-    # Wire Custom Upload button
-    btn_run_upload.click(
-        fn=run_upload_pipeline,
-        inputs=[upload_zip, upload_seg, input_age, input_gender, input_stage],
-        outputs=[upload_status, out_score, out_risk_html, out_roi_image, out_plot, out_table] + slider_list
-    )
-
     # Trigger loading patient LUNG1-003 on launch
     demo.load(
-        fn=load_demo_data,
-        inputs=[select_pid],
+        fn=load_patient_handler,
+        inputs=[select_pid, patient_input],
         outputs=[out_score, out_risk_html, out_roi_image, out_plot, out_table, input_age, input_gender, input_stage] + slider_list
     )
 
