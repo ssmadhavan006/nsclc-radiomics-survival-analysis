@@ -167,3 +167,17 @@ All outputs are saved to the `outputs/` directory:
 2. **Missing Segmentation**: Patient `LUNG1-128` was excluded due to a missing segment.
 3. **FDR Conservatism**: Binary survival status shows no univariate associations after BH FDR correction, showing the need for multivariate modeling.
 4. **Retrospective Endpoints**: Confounders like variable chemotherapy or immunotherapy regimes were not controlled for.
+
+---
+
+## 9. Citations & Data Usage Policy
+
+### Dataset Acquisition
+The benchmark cohort dataset can be downloaded directly from The Cancer Imaging Archive (TCIA):
+* **TCIA Collection Link**: [NSCLC-Radiomics Collection](https://www.cancerimagingarchive.net/collection/nsclc-radiomics/)
+
+### Data Citation Required
+Users must abide by the TCIA Data Usage Policy and Restrictions. Attribution must include the following citation, including the Digital Object Identifier:
+
+* **Data Citation**:
+  Aerts, H. J. W. L., Wee, L., Rios Velazquez, E., Leijenaar, R. T. H., Parmar, C., Grossmann, P., Carvalho, S., Bussink, J., Monshouwer, R., Haibe-Kains, B., Rietveld, D., Hoebers, F., Rietbergen, M. M., Leemans, C. R., Dekker, A., Quackenbush, J., Gillies, R. J., Lambin, P. (2014). Data From NSCLC-Radiomics (version 4) [Data set]. The Cancer Imaging Archive. https://doi.org/10.7937/K9/TCIA.2015.PF0M9REI
