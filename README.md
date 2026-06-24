@@ -19,7 +19,25 @@ It provides a reproducible pipeline to:
 
 ---
 
-## 2. Repository Structure
+## 2. Architecture diagram
+
+Below is the system architecture diagram illustrating the end-to-end quantitative radiomics pipeline, from data ingestion to prognostic model evaluation and the demonstrator application:
+
+![System Architecture Diagram](image.png)
+
+---
+
+## 3. Screenshots
+
+*Placeholder for interactive research demonstrator user interface screenshots. Run the Gradio app locally to interact with the frontend:*
+
+```powershell
+python gradio_app.py
+```
+
+---
+
+## 4. Repository Structure
 
 ```
 radiomics/
@@ -52,7 +70,7 @@ radiomics/
 
 ---
 
-## 3. Installation & Setup
+## 5. Installation & Setup
 
 This project uses Python 3.9 (recommended to avoid compilation issues with PyRadiomics C-extensions on newer Python versions) and `uv` for fast virtual environment management.
 
@@ -75,7 +93,7 @@ uv pip install -r requirements.txt
 
 ---
 
-## 4. Execution Guide
+## 6. Execution Guide
 
 You can run the end-to-end pipeline or execute specific stages using `run_pipeline.py`.
 
@@ -110,7 +128,7 @@ python run_pipeline.py --stage survival
 
 ---
 
-## 5. Summary of Core Outputs
+## 7. Summary of Core Outputs
 
 All outputs are saved to the `outputs/` directory:
 * **Logs & Manifests**:
@@ -143,17 +161,9 @@ All outputs are saved to the `outputs/` directory:
 
 ---
 
-## 6. Limitations & Technical Cautions
+## 8. Limitations & Technical Cautions
 
 1. **Single-Center scanner protocol bias**: Scanning protocols (slice thickness, kernel) are highly uniform in Lung1, which may cause overfitting to acquisition parameters.
 2. **Missing Segmentation**: Patient `LUNG1-128` was excluded due to a missing segment.
 3. **FDR Conservatism**: Binary survival status shows no univariate associations after BH FDR correction, showing the need for multivariate modeling.
 4. **Retrospective Endpoints**: Confounders like variable chemotherapy or immunotherapy regimes were not controlled for.
-
----
-
-## 7. Prototype Screenshots
-
-Below is a screenshot of the interactive research demonstrator:
-
-![NSCLC Quantitative Radiomics Signature Demonstrator](image.png)
