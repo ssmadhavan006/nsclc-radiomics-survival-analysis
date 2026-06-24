@@ -4,336 +4,23 @@ import logging
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-from lifelines import KaplanMeierFitter, CoxPHFitter
-from lifelines.statistics import logrank_test
+import joblib
+from lifelines import CoxPHFitter
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import roc_curve, roc_auc_score
-from datetime import datetime
 from typing import Dict, Any, List, Tuple
 
 from src.utils import load_config
+from src.model_utils import (
+    plot_km_with_risk_table,
+    bootstrap_cox_performance,
+    calculate_time_dependent_roc,
+    plot_calibration_curve_3yr,
+    save_feature_meanings
+)
 
 logger = logging.getLogger("radiomics_pipeline")
 
-def plot_km_with_risk_table(
-    durations: pd.Series,
-    events: pd.Series,
-    labels: pd.Series,
-    title: str,
-    output_path: str,
-    time_unit: str = "Days"
-) -> None:
-    """
-    Plots Kaplan-Meier curves with confidence intervals and a risk table (Rule 25, 36).
-    """
-    unique_groups = sorted(labels.unique())
-    fig = plt.figure(figsize=(10, 8))
-    gs = plt.GridSpec(2, 1, height_ratios=[3, 1], hspace=0.3)
-    ax_km = fig.add_subplot(gs[0])
-    ax_table = fig.add_subplot(gs[1])
-    
-    kmfs = {}
-    colors = sns.color_palette("Set1", len(unique_groups))
-    
-    for idx, group in enumerate(unique_groups):
-        mask = (labels == group)
-        kmf = KaplanMeierFitter()
-        kmf.fit(durations[mask], events[mask], label=str(group))
-        kmf.plot_survival_function(
-            ax=ax_km, color=colors[idx], show_censors=True, ci_show=True,
-            censor_styles={"ms": 6, "mew": 1.5}
-        )
-        kmfs[group] = kmf
-        
-    ax_km.set_title(title, fontsize=12, fontweight="bold")
-    ax_km.set_xlabel("")
-    ax_km.set_ylabel("Survival Probability", fontsize=10)
-    ax_km.grid(True, linestyle="--", alpha=0.5)
-    
-    if len(unique_groups) == 2:
-        m1, m2 = (labels == unique_groups[0]), (labels == unique_groups[1])
-        res = logrank_test(durations[m1], durations[m2], event_observed_A=events[m1], event_observed_B=events[m2])
-        ax_km.text(
-            0.05, 0.05, f"Log-rank p: {res.p_value:.3e}" if res.p_value < 0.001 else f"Log-rank p: {res.p_value:.4f}",
-            transform=ax_km.transAxes, fontsize=9, bbox=dict(boxstyle="round", facecolor="white", alpha=0.8)
-        )
-        
-    time_ticks = np.linspace(0, durations.max(), 6)
-    ax_km.set_xticks(time_ticks)
-    ax_km.set_xticklabels([f"{int(t)}" for t in time_ticks])
-    
-    ax_table.axis('off')
-    table_data = []
-    row_labels = [f"Group {g}" for g in unique_groups]
-    
-    for group in unique_groups:
-        row_counts = []
-        for tick in time_ticks:
-            at_risk = kmfs[group].event_table.loc[tick:]["at_risk"].iloc[0] if tick in kmfs[group].event_table.index else 0
-            if tick > 0 and at_risk == 0:
-                past_events = kmfs[group].event_table.loc[:tick]
-                at_risk = past_events["at_risk"].iloc[-1] - past_events["removed"].iloc[-1] if not past_events.empty else 0
-            row_counts.append(int(at_risk))
-        table_data.append(row_counts)
-        
-    table = ax_table.table(
-        cellText=table_data, rowLabels=row_labels, colLabels=[f"{int(t)} {time_unit[:3]}" for t in time_ticks],
-        cellLoc='center', loc='center'
-    )
-    table.scale(1, 1.3)
-    table.set_fontsize(8)
-    
-    fig.text(0.02, 0.02, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", fontsize=7, style="italic")
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close()
-
-def bootstrap_cox_performance(
-    df: pd.DataFrame,
-    covariates: List[str],
-    n_bootstrap: int = 1000,
-    seed: int = 42
-) -> Tuple[Tuple[float, float], Dict[str, Tuple[float, float]]]:
-    """
-    Performs bootstrap validation to calculate 95% CIs for C-index and Hazard Ratios (Priority 2).
-    """
-    np.random.seed(seed)
-    c_indexes = []
-    hr_samples = {cov: [] for cov in covariates}
-    n_samples = len(df)
-    
-    temp_df = df[covariates + ["Survival.time", "deadstatus.event"]].copy()
-    
-    for _ in range(n_bootstrap):
-        boot_df = temp_df.sample(n=n_samples, replace=True).reset_index(drop=True)
-        if boot_df["deadstatus.event"].sum() in [0, len(boot_df)]:
-            continue
-            
-        cph = CoxPHFitter()
-        try:
-            cph.fit(boot_df, "Survival.time", "deadstatus.event")
-            c_indexes.append(cph.concordance_index_)
-            for cov in covariates:
-                hr_samples[cov].append(np.exp(cph.params_[cov]))
-        except Exception:
-            continue
-            
-    c_index_ci = (np.percentile(c_indexes, 2.5), np.percentile(c_indexes, 97.5))
-    hr_cis = {cov: (np.percentile(hr_samples[cov], 2.5), np.percentile(hr_samples[cov], 97.5)) for cov in covariates if hr_samples[cov]}
-    return c_index_ci, hr_cis
-
-def calculate_time_dependent_roc(
-    durations: np.ndarray,
-    events: np.ndarray,
-    predictions: np.ndarray,
-    time_points: List[float]
-) -> Dict[float, Tuple[np.ndarray, np.ndarray, float]]:
-    """
-    Calculates time-dependent ROC curves and AUC at specific time points (Priority 2).
-    """
-    results = {}
-    for t in time_points:
-        labels, scores = [], []
-        for d, e, s in zip(durations, events, predictions):
-            if d > t:
-                labels.append(0)
-                scores.append(s)
-            elif d <= t and e == 1:
-                labels.append(1)
-                scores.append(s)
-        if len(np.unique(labels)) > 1:
-            fpr, tpr, _ = roc_curve(labels, scores)
-            auc = roc_auc_score(labels, scores)
-            results[t] = (fpr, tpr, auc)
-        else:
-            results[t] = (np.array([]), np.array([]), np.nan)
-    return results
-
-def plot_calibration_curve_3yr(
-    df: pd.DataFrame,
-    cph: CoxPHFitter,
-    output_path: str,
-    time_point: float = 1095,
-    n_bins: int = 5
-) -> None:
-    """
-    Plots predicted vs observed survival probabilities at 3 years (Priority 2).
-    """
-    surv_probs = cph.predict_survival_function(df, times=[time_point]).T.iloc[:, 0]
-    df_cal = df.copy()
-    df_cal["pred_surv"] = surv_probs
-    df_cal["bin"] = pd.qcut(df_cal["pred_surv"], q=n_bins, labels=False, duplicates="drop")
-    
-    pred_vals, obs_vals, obs_cis = [], [], []
-    for b in sorted(df_cal["bin"].unique()):
-        bin_df = df_cal[df_cal["bin"] == b]
-        pred_vals.append(bin_df["pred_surv"].mean())
-        
-        kmf = KaplanMeierFitter()
-        kmf.fit(bin_df["Survival.time"], bin_df["deadstatus.event"])
-        obs_mean = kmf.survival_function_at_times(time_point).values[0]
-        obs_vals.append(obs_mean)
-        
-        ci = kmf.confidence_interval_
-        closest_idx = np.abs(ci.index.values - time_point).argmin()
-        obs_cis.append((ci.iloc[closest_idx].iloc[0], ci.iloc[closest_idx].iloc[1]))
-        
-    plt.figure(figsize=(6, 6))
-    plt.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Ideal (Perfect)")
-    yerr = np.array([[obs - ci[0], ci[1] - obs] for obs, ci in zip(obs_vals, obs_cis)]).T
-    plt.errorbar(pred_vals, obs_vals, yerr=yerr, fmt="o-", color="navy", label="Model Calibration", elinewidth=1.5, capsize=3)
-    
-    plt.xlim(0, 1)
-    plt.ylim(0, 1)
-    plt.xlabel("Predicted 3-Year Survival Probability", fontsize=10)
-    plt.ylabel("Observed 3-Year Survival Probability", fontsize=10)
-    plt.title("Model Calibration Plot at 3 Years", fontsize=12, fontweight="bold")
-    plt.legend(loc="upper left")
-    plt.grid(True, linestyle="--", alpha=0.5)
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close()
-
-def save_feature_meanings(selected_features: List[str], coef_series: pd.Series, output_path: str) -> None:
-    """
-    Saves a CSV detailing the physical and biological meanings of the selected radiomic features (Rule 17, 30).
-    """
-    meanings = {
-        "original_shape_Elongation": {
-            "Category": "Shape",
-            "Wavelet": "Original",
-            "Definition": "Ratio of the minor axis to the major axis of the tumor ellipsoid.",
-            "Interpretation": "Measures elongation. Lower values indicate highly elongated tumors, reflecting asymmetric, aggressive growth along anatomical structures."
-        },
-        "wavelet-LLH_firstorder_Maximum": {
-            "Category": "First-Order",
-            "Wavelet": "LLH",
-            "Definition": "Maximum voxel value after LLH wavelet filtering.",
-            "Interpretation": "Reflects localized high-density peaks (e.g. solid components/calcification) in a low-frequency background."
-        },
-        "wavelet-LLH_firstorder_Median": {
-            "Category": "First-Order",
-            "Wavelet": "LLH",
-            "Definition": "Median voxel value after LLH wavelet filtering.",
-            "Interpretation": "Represents the central density of the tumor after smoothing high-frequency noise horizontally/vertically."
-        },
-        "wavelet-LLH_firstorder_TotalEnergy": {
-            "Category": "First-Order",
-            "Wavelet": "LLH",
-            "Definition": "Sum of squared voxel values scaled by voxel volume.",
-            "Interpretation": "Combines tumor volume and density. Large, dense tumors produce high values, indicating overall tumor burden."
-        },
-        "wavelet-LHL_firstorder_Skewness": {
-            "Category": "First-Order",
-            "Wavelet": "LHL",
-            "Definition": "Asymmetry of voxel intensity distribution about its mean.",
-            "Interpretation": "Indicates spatial asymmetry in tissue composition (e.g. localized necrotic vs viable tumor regions)."
-        },
-        "wavelet-LHL_glrlm_LongRunHighGrayLevelEmphasis": {
-            "Category": "GLRLM",
-            "Wavelet": "LHL",
-            "Definition": "Joint emphasis of long runs and high gray-level values.",
-            "Interpretation": "Represents large, continuous zones of high density (e.g. active solid tumor mass)."
-        },
-        "wavelet-LHL_gldm_DependenceVariance": {
-            "Category": "GLDM",
-            "Wavelet": "LHL",
-            "Definition": "Variance of local voxel dependency counts.",
-            "Interpretation": "Indicates variation in local texture density, suggesting micro-environmental structural heterogeneity."
-        },
-        "wavelet-LHL_ngtdm_Strength": {
-            "Category": "NGTDM",
-            "Wavelet": "LHL",
-            "Definition": "Measures texture contrast and sharpness.",
-            "Interpretation": "Reflects clear interfaces and high contrast transitions between different tumor tissue types."
-        },
-        "wavelet-LHH_firstorder_Kurtosis": {
-            "Category": "First-Order",
-            "Wavelet": "LHH",
-            "Definition": "Peakedness of the intensity distribution.",
-            "Interpretation": "High values indicate intensity variations are dominated by extreme values (e.g. microcalcifications/necrotic spots)."
-        },
-        "wavelet-LHH_firstorder_Maximum": {
-            "Category": "First-Order",
-            "Wavelet": "LHH",
-            "Definition": "Maximum voxel value in the horizontal high-frequency band.",
-            "Interpretation": "Reflects fine-grained high-intensity details or sharp horizontal density transitions."
-        },
-        "wavelet-HHL_firstorder_Skewness": {
-            "Category": "First-Order",
-            "Wavelet": "HHL",
-            "Definition": "Intensity asymmetry in the HHL wavelet band.",
-            "Interpretation": "Reflects directional asymmetry in cellular density or vascular patterns."
-        },
-        "wavelet-HHL_glszm_SizeZoneNonUniformity": {
-            "Category": "GLSZM",
-            "Wavelet": "HHL",
-            "Definition": "Variability of size zone volumes throughout the tumor.",
-            "Interpretation": "High values indicate a wide variety of zone sizes, representing highly fragmented, heterogeneous tumor zones."
-        },
-        "wavelet-HHH_glszm_GrayLevelNonUniformity": {
-            "Category": "GLSZM",
-            "Wavelet": "HHH",
-            "Definition": "Variability of gray-level intensities across size zones.",
-            "Interpretation": "Indicates significant variation in density levels across zones, reflecting intratumoral density heterogeneity."
-        },
-        "wavelet-HHH_glszm_SizeZoneNonUniformity": {
-            "Category": "GLSZM",
-            "Wavelet": "HHH",
-            "Definition": "Variability of size zone volumes under HHH filtering.",
-            "Interpretation": "Highly heterogeneous distribution of fine-texture zone sizes, indicating structural fragmentation."
-        },
-        "wavelet-HHH_glszm_SmallAreaHighGrayLevelEmphasis": {
-            "Category": "GLSZM",
-            "Wavelet": "HHH",
-            "Definition": "Emphasizes small zones of high gray-level values.",
-            "Interpretation": "Reflects small, highly dense clusters of active cells or microcalcifications, indicating active proliferation."
-        },
-        "wavelet-HHH_glszm_ZoneVariance": {
-            "Category": "GLSZM",
-            "Wavelet": "HHH",
-            "Definition": "Variance in zone size volumes.",
-            "Interpretation": "Indicates complex structural patterns with a mix of very small and very large density zones."
-        },
-        "wavelet-LLL_firstorder_Minimum": {
-            "Category": "First-Order",
-            "Wavelet": "LLL",
-            "Definition": "Minimum voxel value in the smoothed LLL band.",
-            "Interpretation": "Represents the lowest density in the smoothed volume, typically corresponding to necrosis or fluid."
-        },
-        "wavelet-LLL_firstorder_Range": {
-            "Category": "First-Order",
-            "Wavelet": "LLL",
-            "Definition": "Difference between max and min voxel values in the LLL band.",
-            "Interpretation": "Measures the overall range of macro-intensities, reflecting broad density gradients."
-        },
-        "wavelet-LLL_gldm_SmallDependenceHighGrayLevelEmphasis": {
-            "Category": "GLDM",
-            "Wavelet": "LLL",
-            "Definition": "Emphasizes small dependencies with high gray-level values.",
-            "Interpretation": "Indicates fine-grained high-density textures in the smoothed volume, reflecting clusters of viable tumor cells."
-        }
-    }
-    
-    records = []
-    for feat in selected_features:
-        info = meanings.get(feat, {
-            "Category": "Unknown",
-            "Wavelet": "Unknown",
-            "Definition": "Custom texture/intensity metric.",
-            "Interpretation": "Reflects spatial density variation."
-        })
-        records.append({
-            "Feature Name": feat,
-            "Category": info["Category"],
-            "Wavelet Band": info["Wavelet"],
-            "Coefficient": coef_series.get(feat, 0.0),
-            "IBSI Definition": info["Definition"],
-            "Biological Interpretation": info["Interpretation"]
-        })
-        
-    res_df = pd.DataFrame(records)
-    res_df.to_csv(output_path, index=False)
 
 def run_univariate_cox_models(df: pd.DataFrame, feature_cols: List[str], output_dir: str) -> pd.DataFrame:
     """
@@ -569,3 +256,12 @@ def run_survival_pipeline(config_path: str = "src/config.yaml") -> None:
         plt.grid(True, linestyle="--", alpha=0.5)
         plt.savefig(os.path.join(fig_dir, "time_dependent_roc.png"), dpi=300, bbox_inches="tight")
         plt.close()
+        
+        # Serialize model checkpoints (Task 4)
+        scaler_selected = StandardScaler()
+        scaler_selected.fit(df[selected_features])
+        joblib.dump(scaler_selected, os.path.join(feat_dir, "scaler.joblib"))
+        joblib.dump(cph_radiomics, os.path.join(feat_dir, "model_radiomics.joblib"))
+        joblib.dump(cph_combined, os.path.join(feat_dir, "model_combined.joblib"))
+        logger.info("Saved serialized model checkpoints to outputs/features/")
+

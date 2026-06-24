@@ -1,7 +1,7 @@
 paths:
-  dataset_root: "d:/Coding/radiomics/dataset/NSCLC-Radiomics"
-  clinical_csv: "d:/Coding/radiomics/dataset/NSCLC-Radiomics-Lung1.clinical-version3-Oct-2019.csv"
-  output_dir: "d:/Coding/radiomics/outputs"
+  dataset_root: "dataset/NSCLC-Radiomics"
+  clinical_csv: "dataset/NSCLC-Radiomics-Lung1.clinical-version3-Oct-2019.csv"
+  output_dir: "outputs"
 
 preprocessing:
   target_spacing: [1.0, 1.0, 1.0]          # mm, isotropic resampling

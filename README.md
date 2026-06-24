@@ -149,3 +149,11 @@ All outputs are saved to the `outputs/` directory:
 2. **Missing Segmentation**: Patient `LUNG1-128` was excluded due to a missing segment.
 3. **FDR Conservatism**: Binary survival status shows no univariate associations after BH FDR correction, showing the need for multivariate modeling.
 4. **Retrospective Endpoints**: Confounders like variable chemotherapy or immunotherapy regimes were not controlled for.
+
+---
+
+## 7. Prototype Screenshots
+
+Below is a screenshot of the interactive research demonstrator:
+
+![NSCLC Quantitative Radiomics Signature Demonstrator](image.png)

@@ -5,7 +5,7 @@ import yaml
 from typing import Any, Dict, Generator
 from contextlib import contextmanager
 
-def setup_logger(log_dir: str = "d:/Coding/radiomics/outputs/logs") -> logging.Logger:
+def setup_logger(log_dir: str = "outputs/logs") -> logging.Logger:
     """
     Sets up the pipeline logger to write to both console and a timestamped file.
     
@@ -42,7 +42,7 @@ def setup_logger(log_dir: str = "d:/Coding/radiomics/outputs/logs") -> logging.L
         
     return logger
 
-def load_config(config_path: str = "d:/Coding/radiomics/src/config.yaml") -> Dict[str, Any]:
+def load_config(config_path: str = "src/config.yaml") -> Dict[str, Any]:
     """
     Loads and parses the master configuration YAML file.
     

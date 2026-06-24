@@ -1,54 +1,43 @@
-# Radiomics Pipeline Architecture Diagram
+# Quantitative Radiomics Pipeline Architecture Diagram
 
-This document contains a Mermaid flowchart depicting the high-level pipeline architecture from clinical and image data ingestion to prognostic validation.
+This document illustrates the end-to-end quantitative radiomics pipeline for characterization of non-small cell lung cancer (NSCLC) tumors and overall survival outcomes prediction.
 
-```mermaid
-graph TD
-    subgraph Ingestion ["1. Data Ingestion & QC"]
-        A[Clinical Metadata CSV] --> C[Ingestion Manifest Builder]
-        B[CT/SEG DICOM Folders] --> C
-        C --> D{Coordinate QC}
-        D -->|Fail| E[Exclude: failed_cases.csv]
-        D -->|Pass| F[Valid Cohort Manifest]
-    end
-    subgraph Preprocessing ["2. Image Preprocessing"]
-        F --> G[HU Intensity Clipping: -1000 to 400 HU]
-        G --> H[Isotropic Resampling: 1.0mm^3 B-Spline / NN]
-        H --> I{Spatial Overlap Verification}
-        I -->|Fail| E
-        I -->|Pass| J[Coordinate-Aligned CT & Mask]
-    end
-    subgraph Extraction ["3. Feature Extraction"]
-        J --> K[Parallel PyRadiomics Loop: LokyBackend]
-        K --> L[Raw Features: raw_features_all_patients.csv]
-    end
-    subgraph Engineering ["4. Feature Engineering"]
-        L --> M[Variance Filter: threshold = 0.01]
-        M --> N[Spearman Redundancy Filter: threshold = 0.95]
-        N --> O[Clean Features: cleaned_feature_matrix.csv]
-    end
-    subgraph Analysis ["5. Statistical Analysis"]
-        O --> P[Univariate Association Tests]
-        P --> Q[Benjamini-Hochberg FDR Correction]
-        Q --> R[Stage-Associated Phenotypes]
-    end
-    subgraph Prognostic ["6. Survival Modeling"]
-        O --> S[5-Fold Cross-Validated LASSO-Cox]
-        S --> T[19 Selected Signature Features]
-        T --> U[PrognosticScore Signature]
-    end
-    subgraph Validation ["7. Validation & Evaluation"]
-        U --> V[Kaplan-Meier Risk Stratification]
-        U --> W[1000x Bootstrap CIs & Multivariate Cox]
-        U --> X[Time-Dependent ROC AUCs: 1, 3, 5-Year]
-        U --> Y[3-Year Calibration Quintiles]
-    end
+## Research-Grade Architecture Diagram
 
-    style Ingestion fill:#f9f,stroke:#333,stroke-width:2px
-    style Preprocessing fill:#bbf,stroke:#333,stroke-width:2px
-    style Extraction fill:#bfb,stroke:#333,stroke-width:2px
-    style Engineering fill:#ffb,stroke:#333,stroke-width:2px
-    style Analysis fill:#fbb,stroke:#333,stroke-width:2px
-    style Prognostic fill:#fbf,stroke:#333,stroke-width:2px
-    style Validation fill:#bff,stroke:#333,stroke-width:2px
-```
+Below is the generated high-impact pipeline diagram:
+
+![End-to-End Quantitative Radiomics Pipeline Diagram](file:///C:/Users/Admin/.gemini/antigravity/brain/3ae17894-4049-43e6-8f28-e1bae0b90fff/architecture_diagram_1782315322768.png)
+
+---
+
+## Detailed Pipeline Stages
+
+### 1. Data Ingestion & Quality Control
+* **Inputs**: Clinical metadata spreadsheet (CSV) and raw 3D DICOM CT scans accompanied by GTV primary tumor RT-struct segmentations.
+* **Checks**: Discovers missing volumes/masks (e.g. `LUNG1-128`) and logs exclusions to `failed_cases.csv`. Sorts DICOM slices by Z-coordinate.
+
+### 2. Image Preprocessing
+* **Clipping**: CT voxel intensities clipped to $[-1000, 400]$ HU to isolate soft-tissue and lung densities while discarding noise.
+* **Resampling**: Isotropic voxel spacing standardization to $1.0 \times 1.0 \times 1.0\text{ mm}^3$ using standard interpolation (B-Spline for CT volumes, Nearest Neighbor for segmentation masks).
+* **Overlap QC**: Aborts feature extraction if CT dimensions, origins, or directions mismatch the segmentation mask coordinate grid.
+
+### 3. High-Throughput Radiomic Feature Extraction
+* **Core Extractor**: Runs parallel PyRadiomics engine using multi-threaded Loky backend (20 CPU threads) with temporary checkpointing.
+* **Feature Vector**: Extracts 889 features per patient:
+  * 14 3D Shape features
+  * 18 First-Order statistics features
+  * 75 Texture features (GLCM, GLSZM, GLRLM, NGTDM, GLDM)
+  * 782 Wavelet decompositions (decomposed across LLL, LLH, LHL, LHH, HLL, HLH, HHL, HHH sub-bands)
+
+### 4. Dimensionality Reduction & Cleaning
+* **Variance Threshold**: Filters out 289 low-variance features ($Var < 0.01$) that carry minimal spatial texture information.
+* **Spearman Redundancy**: Drops 372 collinear features with pairwise Spearman correlation coefficients $|\rho| > 0.95$, retaining 190 independent phenotypes.
+
+### 5. Statistical Association Testing
+* **Staging Association**: Mann-Whitney U, Spearman $\rho$, and Kruskal-Wallis tests corrected via Benjamini-Hochberg False Discovery Rate (FDR) at $\alpha = 0.05$. Selects 113 stage-associated phenotypes.
+
+### 6. Signature Modeling & Validation
+* **Feature Selection**: 5-fold cross-validated LASSO-penalized Cox Proportional Hazards regression shrinks coefficients to isolate a 19-feature radiomic signature.
+* **Prognostic Score**: Signature partial hazard is scaled against cohort median.
+* **Bootstrap Validation**: 1000 bootstrap resamples are generated to calculate 95% Confidence Intervals for C-index and Wald multivariate Hazard Ratios.
+* **Performance Evaluation**: Generates time-dependent ROC curve AUC values (1, 3, 5-year overall survival) and calibration quintile alignments.
