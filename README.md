@@ -19,7 +19,7 @@ It provides a reproducible pipeline to:
 
 ---
 
-## 2. Architecture diagram
+## 2. Architecture & Methodology
 
 Below is the system architecture diagram illustrating the end-to-end quantitative radiomics pipeline, from data ingestion to prognostic model evaluation and the demonstrator application:
 
