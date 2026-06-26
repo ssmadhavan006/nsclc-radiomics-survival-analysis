@@ -25,6 +25,8 @@ Below is the system architecture diagram illustrating the end-to-end quantitativ
 
 ![System Architecture Diagram](image.png)
 
+![Research Workflow Flowchart](flowchart.png)
+
 ---
 
 ## 3. Screenshots
