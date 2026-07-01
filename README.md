@@ -18,24 +18,21 @@ It provides a reproducible pipeline to:
 7. Generate publication-quality Kaplan-Meier survival curves, forest plots, and correlation clustermaps.
 
 ---
+## 2. Live Demo
 
-## 2. Architecture & Methodology
+> **Click the thumbnail below to watch the full project demonstration on YouTube.**
+
+[![See the Radiomics Pipeline in Action](https://img.youtube.com/vi/w0k_5CbNT88/0.jpg)](https://www.youtube.com/watch?v=w0k_5CbNT88)
+
+---
+
+## 3. Architecture & Methodology
 
 Below is the system architecture diagram illustrating the end-to-end quantitative radiomics pipeline, from data ingestion to prognostic model evaluation and the demonstrator application:
 
 ![System Architecture Diagram](image.png)
 
 ![Research Workflow Flowchart](flowchart.png)
-
----
-
-## 3. Screenshots
-
-*Placeholder for interactive research demonstrator user interface screenshots. Run the Gradio app locally to interact with the frontend:*
-
-```powershell
-python gradio_app.py
-```
 
 ---
 
